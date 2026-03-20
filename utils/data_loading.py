@@ -64,21 +64,44 @@ class BasicDataset(Dataset):
     @staticmethod
     def preprocess(mask_values, pil_img, scale, is_mask):
         w, h = pil_img.size
-        newW, newH = int(scale * w), int(scale * h)
-        assert newW > 0 and newH > 0, 'Scale is too small, resized images would have no pixel'
-        pil_img = pil_img.resize((newW, newH), resample=Image.NEAREST if is_mask else Image.BICUBIC)
-        img = np.asarray(pil_img)
-
+        target_size = 512
+        
+        # 1. 计算等比例缩放系数，让最长边精确等于 512
+        ratio = target_size / max(w, h)
+        new_w, new_h = int(w * ratio), int(h * ratio)
+        
+        # 2. 进行等比例缩放 (掩码用最近邻插值防止产生边缘模糊的中间值，原图用双三次插值)
+        pil_img = pil_img.resize((new_w, new_h), resample=Image.NEAREST if is_mask else Image.BICUBIC)
+        
+        # 3. 制作一张 512x512 的纯黑“画布” 
         if is_mask:
-            mask = np.zeros((newH, newW), dtype=np.int64)
+            new_img = Image.new("L", (target_size, target_size), 0)
+        else:
+            # 默认原图是 RGB 3通道
+            new_img = Image.new("RGB", (target_size, target_size), (0, 0, 0))
+            
+        # 4. 计算居中坐标，把缩放后的图片“贴”到纯黑画布的正中间
+        paste_x = (target_size - new_w) // 2
+        paste_y = (target_size - new_h) // 2
+        new_img.paste(pil_img, (paste_x, paste_y))
+        
+        # 5. 转换为 numpy 矩阵
+        img = np.asarray(new_img)
+
+        # 6. 处理掩码图 (融合原仓库逻辑 + 安全兜底)
+        if is_mask:
+            mask = np.zeros((target_size, target_size), dtype=np.int64)
             for i, v in enumerate(mask_values):
                 if img.ndim == 2:
                     mask[img == v] = i
                 else:
                     mask[(img == v).all(-1)] = i
-
+                    
+            # 【终极安全锁】：强制将所有大于 1 的值变为 1，彻底杜绝 CUDA assert 报错
+            mask = np.where(mask > 0, 1, 0)
             return mask
 
+        # 7. 处理原始肠镜图 (原仓库逻辑保留)
         else:
             if img.ndim == 2:
                 img = img[np.newaxis, ...]

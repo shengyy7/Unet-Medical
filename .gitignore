@@ -1,9 +1,13 @@
-*.pyc
+# 忽略数据和权重
 data/
-__pycache__/
+results/
 checkpoints/
+data_split/
 *.pth
-*.jpg
-venv/
-.idea/
+*.npy
+
+# 忽略系统和环境文件
+__pycache__/
+.vscode/
+.ipynb_checkpoints/
 wandb/

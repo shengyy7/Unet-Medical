@@ -53,10 +53,22 @@ def get_args():
 
 
 def get_output_filenames(args):
-    def _generate_name(fn):
-        return f'{os.path.splitext(fn)[0]}_OUT.png'
+    # 如果用户没指定 --output，则在原图同目录下生成 _OUT.png
+    if not args.output:
+        return [f'{os.path.splitext(fn)[0]}_OUT.png' for fn in args.input]
+    
+    # 如果用户指定了 --output，且只有一个参数，并且这个参数是已存在的目录
+    if len(args.output) == 1 and os.path.isdir(args.output[0]):
+        output_dir = args.output[0]
+        out_files = []
+        for fn in args.input:
+            base_name = os.path.basename(fn)
+            name_without_ext = os.path.splitext(base_name)[0]
+            out_files.append(os.path.join(output_dir, f"{name_without_ext}_mask.png"))
+        return out_files
 
-    return args.output or list(map(_generate_name, args.input))
+    # 否则，认为用户手动提供了一对一的文件名列表
+    return args.output
 
 
 def mask_to_image(mask: np.ndarray, mask_values):
