@@ -34,6 +34,8 @@ dir_checkpoint = Path('./checkpoints/')
 def train_model(
         model,
         device,
+        dir_checkpoint, 
+        run_name,
         epochs: int = 5,
         batch_size: int = 1,
         learning_rate: float = 1e-5,
@@ -41,7 +43,7 @@ def train_model(
         save_checkpoint: bool = True,
         img_scale: float = 0.5,
         amp: bool = False,
-        weight_decay: float = 1e-8,
+        weight_decay: float = 1e-6,# 从最初的1e-8到1e-4到1e-6
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
 ):
@@ -73,7 +75,7 @@ def train_model(
     val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
 
     # (Initialize logging)
-    experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
+    experiment = wandb.init(project='U-Net', resume='allow',name=run_name, anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
             split_strategy="physical_712", save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp)
@@ -92,8 +94,12 @@ def train_model(
     ''')
 
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)  # goal: maximize Dice score
+
+    # 【修改：优化器换成 AdamW 并增加权重衰减防止过拟合】
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    
+    # 【修改：将 patience 改为 15，给模型更多探索时间】
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=15)
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
@@ -118,10 +124,10 @@ def train_model(
                     masks_pred = model(images)
                     if model.n_classes == 1:
                         loss = criterion(masks_pred.squeeze(1), true_masks.float())
-                        loss += dice_loss(F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False)
+                        loss += 1.2*dice_loss(F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False)
                     else:
                         loss = criterion(masks_pred, true_masks)
-                        loss += dice_loss(
+                        loss += 1.2*dice_loss(
                             F.softmax(masks_pred, dim=1).float(),
                             F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
                             multiclass=True
@@ -182,11 +188,11 @@ def train_model(
                             traceback.print_exc() # 这会打印完整的错误链路
 
         if save_checkpoint:
-            Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
+            dir_checkpoint.mkdir(parents=True, exist_ok=True) # 自动创建新文件夹
             state_dict = model.state_dict()
             state_dict['mask_values'] = train_set.mask_values
             torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
-            logging.info(f'Checkpoint {epoch} saved!')
+            logging.info(f'Checkpoint {epoch} saved to {dir_checkpoint}!')
 
 
 def get_args():
@@ -202,6 +208,7 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--run-name', type=str, default='v1_base', help='本次实验的唯一名称')
 
     return parser.parse_args()
 
@@ -210,6 +217,10 @@ if __name__ == '__main__':
     args = get_args()
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+    checkpoint_path = Path('./checkpoints') / args.run_name
+    checkpoint_path.mkdir(parents=True, exist_ok=True)
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
 
@@ -238,6 +249,8 @@ if __name__ == '__main__':
             batch_size=args.batch_size,
             learning_rate=args.lr,
             device=device,
+            dir_checkpoint=checkpoint_path, # 需要修改 train_model 的接收参数
+            run_name=args.run_name,
             img_scale=args.scale,
             # val_percent=args.val / 100,
             amp=args.amp
@@ -256,5 +269,7 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             # val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            dir_checkpoint=checkpoint_path, # 需要修改 train_model 的接收参数
+            run_name=args.run_name
         )
