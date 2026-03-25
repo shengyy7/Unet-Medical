@@ -20,6 +20,9 @@ from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 import traceback
 
+import tempfile
+print(f"当前程序使用的临时目录是: {tempfile.gettempdir()}")
+
 # dir_img = Path('./data/imgs/')
 # dir_mask = Path('./data/masks/')
 # dir_checkpoint = Path('./checkpoints/')
@@ -43,7 +46,7 @@ def train_model(
         save_checkpoint: bool = True,
         img_scale: float = 0.5,
         amp: bool = False,
-        weight_decay: float = 1e-6,# 从最初的1e-8到1e-4到1e-6
+        weight_decay: float = 1e-4,# 从最初的1e-8到1e-4到1e-6到1e-4
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
 ):
@@ -95,14 +98,25 @@ def train_model(
 
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
 
-    # 【修改：优化器换成 AdamW 并增加权重衰减防止过拟合】
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    
-    # 【修改：将 patience 改为 15，给模型更多探索时间】
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=15)
+    # # 【修改：优化器换成 AdamW 并增加权重衰减防止过拟合】
+    # optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    # # 【修改：将 patience 改为 15，给模型更多探索时间】
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=15)
+
+    # 1. 适当调大 weight_decay（例如 1e-4），防止模型后期过度拟合训练集噪声
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay) 
+
+    # 2. 使用余弦退火，T_max 设置为总 Epoch 数
+    # 这会让 LR 呈曲线下降，直到最后一个 Epoch 降至最小值
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-8)
+
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
+    
+
+    # --- 新增：初始化最高分数变量 ---
+    best_val_score = -float('inf')
 
     # 5. Begin training
     for epoch in range(1, epochs + 1):
@@ -163,9 +177,21 @@ def train_model(
                                 histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
                         val_score = evaluate(model, val_loader, device, amp)
-                        scheduler.step(val_score)
+                        
 
                         logging.info('Validation Dice score: {}'.format(val_score))
+
+                        # 判断并保存最好的模型
+                        if val_score > best_val_score:
+                            best_val_score = val_score
+                            Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
+                            state_dict = model.state_dict()
+                            state_dict['mask_values'] = train_set.mask_values
+
+                            # 固定名称，直接覆盖旧的最好模型
+                            save_path = str(dir_checkpoint / 'best_model.pth')
+                            torch.save(state_dict, save_path)
+                            logging.info(f'New best model saved! Dice: {val_score:.4f}')
                         try:
                             img_numpy = images[0].cpu().permute(1, 2, 0).numpy()
                             # 对于 2 维掩码 [H, W]，直接转 Numpy 即可
@@ -187,12 +213,15 @@ def train_model(
                             print(f"___ 捕获到错误: {e} ___")
                             traceback.print_exc() # 这会打印完整的错误链路
 
+        scheduler.step()
         if save_checkpoint:
             dir_checkpoint.mkdir(parents=True, exist_ok=True) # 自动创建新文件夹
             state_dict = model.state_dict()
             state_dict['mask_values'] = train_set.mask_values
-            torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
-            logging.info(f'Checkpoint {epoch} saved to {dir_checkpoint}!')
+
+            last_path = str(dir_checkpoint / 'last_model.pth')
+            torch.save(state_dict, last_path)
+            logging.info(f'Last model updated at epoch {epoch}')
 
 
 def get_args():

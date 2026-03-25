@@ -1,12 +1,15 @@
 #!/bin/bash
 export CUDA_VISIBLE_DEVICES=6
 
+# 强制在脚本运行环境中指定临时目录
+export TMPDIR=/data4/shengyingying/tmp
+
 # 参数设置
 EPOCHS=100
 BATCH_SIZE=8
 LEARNING_RATE=1e-5
 CLASSES=2
-RUN_NAME="v3" # 建议修改名字，区分是否从零开始
+RUN_NAME="v4" 
 
 # 💡 建议：如果要对比实验，把 --load 行注释掉
 # LOAD_PATH="./checkpoints/checkpoint_epoch100.pth"

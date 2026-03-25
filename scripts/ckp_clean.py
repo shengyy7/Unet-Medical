@@ -3,16 +3,16 @@ from pathlib import Path
 
 # ================= 配置区域 =================
 # 1. 你的检查点目录 (根据你的 train.py 设置)
-CHECKPOINT_DIR = Path('./checkpoints') 
+CHECKPOINT_DIR = Path('./checkpoints/v2_adamw_patience15') 
 
 # 2. 你想保留的 Epoch 编号 (比如最好的在 85 轮，最后的是 100 轮)
 # 请修改下面的数字
-BEST_EPOCH = 85  
+BEST_EPOCH = 2
 LAST_EPOCH = 100 
 
 # 3. 是否开启“只看预览不删除”模式
 # 先保持 True 运行一次，确认输出列表正确后，再改为 False 执行删除
-DRY_RUN = True 
+DRY_RUN = False
 # ===========================================
 
 def manual_cleanup():
